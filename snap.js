@@ -2091,6 +2091,7 @@
     let activeMode = 'N';
     let useMainland = true;
     let isExpanded = false;
+    const options = ['N', 'S', 'E', 'W'];
 
     // --- INTERCEPTOR ---
     const originalFetch = window.fetch;
@@ -2100,33 +2101,47 @@
             try {
                 let body = JSON.parse(args[1].body);
                 if (body.lat && body.lng) {
-                    const geoRes = await originalFetch("https://www.geoguessr.com/api/v4/geo-coding/country", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ lat: body.lat, lng: body.lng })
-                    });
-
-                    const geoData = await geoRes.json();
-                    const countryCode = geoData?.countryCode?.toLowerCase();
-
-                    if (countryCode && extremes[countryCode]) {
-                        const countryData = extremes[countryCode];
-                        const category = (useMainland && countryData.mainland) ? 'mainland' : 'all';
-                        const snap = countryData[category][activeMode];
-                        body.lat = snap.lat;
-                        body.lng = snap.lng;
-                        args[1].body = JSON.stringify(body);
-                        console.log(`Snapped to ${countryCode.toUpperCase()} ${activeMode}`);
+                    
+                    // Create a temporary mode for this request to safely handle Random
+                    // without permanently changing your UI selection
+                    let currentMode = activeMode;
+                    if (currentMode === 'Random') {
+                        currentMode = options[Math.floor(Math.random() * options.length)];
                     }
-                    else {
-                        const snap = world[activeMode];
+
+                    try {
+                        const geoRes = await originalFetch("https://www.geoguessr.com/api/v4/geo-coding/country", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ lat: body.lat, lng: body.lng })
+                        });
+
+                        const geoData = await geoRes.json();
+                        const countryCode = geoData?.countryCode?.toLowerCase();
+
+                        if (countryCode && extremes[countryCode]) {
+                            const countryData = extremes[countryCode];
+                            const category = (useMainland && countryData.mainland) ? 'mainland' : 'all';
+                            const snap = countryData[category][currentMode];
+                            body.lat = snap.lat;
+                            body.lng = snap.lng;
+                            args[1].body = JSON.stringify(body);
+                            console.log(`Snapped to ${countryCode.toUpperCase()} ${currentMode}`);
+                        } else {
+                            // Force an error if you clicked the ocean so the catch block handles it
+                            throw new Error("No valid country code");
+                        }
+                    } catch (geoError) {
+                        // Fallback to world bounds if geocoding fails (e.g., clicking in the ocean)
+                        const snap = world[currentMode];
                         body.lat = snap.lat;
                         body.lng = snap.lng;
                         args[1].body = JSON.stringify(body);
+                        console.log(`Fallback Snapped to World ${currentMode}`);
                     }
                 }
             } catch (e) {
-                // Silent fail to ensure game doesn't crash if intercept fails
+                // Silent fail to ensure game doesn't crash
             }
         }
         return originalFetch.apply(this, args);
@@ -2189,11 +2204,19 @@
                 padding: 10px; border-radius: 8px; cursor: pointer; font-weight: bold;
             }
         `;
-        document.head.appendChild(styleSheet);
+        
+        // Safety check for @run-at document-start
+        if (document.head) {
+            document.head.appendChild(styleSheet);
+        } else {
+            document.addEventListener('DOMContentLoaded', () => document.head.appendChild(styleSheet));
+        }
     }
 
     // --- UI RENDER ---
     function buildUI() {
+        if (!document.body) return; // Prevent trying to draw UI before body loads
+        
         let container = document.getElementById('snap-container');
         if (!container) {
             container = document.createElement('div');
@@ -2211,8 +2234,10 @@
             container.innerHTML = `
                 <div style="text-align:center; font-weight:800; color:#818cf8; font-size:11px; margin-bottom:10px;">DIRECTIONAL SNAPPING</div>
                 <div class="btn-grid">
-                    ${['N', 'S', 'E', 'W'].map(m => `
-                        <button class="snap-btn ${activeMode === m ? 'active' : ''}" id="btn-${m}">${m === 'N' ? 'NORTH' : m === 'S' ? 'SOUTH' : m === 'E' ? 'EAST' : 'WEST'}</button>
+                    ${['N', 'S', 'E', 'W', 'Random'].map(m => `
+                        <button class="snap-btn ${activeMode === m ? 'active' : ''}" id="btn-${m}" ${m === 'Random' ? 'style="grid-column: span 2;"' : ''}>
+                            ${m === 'N' ? 'NORTH' : m === 'S' ? 'SOUTH' : m === 'E' ? 'EAST' : m === 'W' ? 'WEST' : 'RANDOM'}
+                        </button>
                     `).join('')}
                 </div>
                 <div class="config-row">
@@ -2222,8 +2247,8 @@
                 <button class="close-btn" id="close-apply">CLOSE & APPLY</button>
             `;
 
-            // Event Listeners for Expanded Mode
-            ['N', 'S', 'E', 'W'].forEach(m => {
+            // Event Listeners for Expanded Mode (Random is now included!)
+            ['N', 'S', 'E', 'W', 'Random'].forEach(m => {
                 document.getElementById(`btn-${m}`).onclick = () => { activeMode = m; buildUI(); };
             });
             document.getElementById('ml-cb').onchange = (e) => { useMainland = e.target.checked; };
